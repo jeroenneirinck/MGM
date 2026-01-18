@@ -5,17 +5,99 @@
 # Logbestand: Gegevens en acties worden gelogd naar een bestand op het bureablad
 # Opmerking: Dit script vereist PowerShell 5.1 of hoger en moet worden uitgevoerd met beheerdersrechten.
 
-# === Logbestand per sessie ===
+# Waarschuwing 
+# Controleer execution policy
+$policy = Get-ExecutionPolicy
+if ($policy -eq 'Restricted' -or $policy -eq 'Undefined') {
+    Write-Host "PowerShell scripts zijn momenteel geblokkeerd door de Execution Policy ($policy)." -ForegroundColor Yellow
+    Write-Host "Voer dit script uit met: powershell.exe -ExecutionPolicy Bypass -File '$($MyInvocation.MyCommand.Definition)'" -ForegroundColor Yellow
+    Pause
+    Exit
+}
+
+# Controleer of script als administrator wordt uitgevoerd
+function Test-IsAdministrator {
+    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+if (-not (Test-IsAdministrator)) {
+    Write-Host "Dit script moet worden uitgevoerd met administratorrechten!" -ForegroundColor Yellow
+    Write-Host "Je kunt dit doen door rechts te klikken op PowerShell en 'Als administrator uitvoeren' te kiezen." -ForegroundColor Yellow
+
+    # Optioneel: vraag herstart als admin
+    $choice = Read-Host "Wil je dat het script zichzelf herstart met beheerdersrechten? (J/N)"
+    if ($choice -match "^[Jj]$") {
+        try {
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = "powershell.exe"
+            $psi.Arguments = "-ExecutionPolicy Bypass -File `"$($MyInvocation.MyCommand.Definition)`""
+            $psi.Verb = "runas"   # Forceert 'Run as Administrator'
+            [System.Diagnostics.Process]::Start($psi) | Out-Null
+            Exit
+        }
+        catch {
+            Write-Host "Herstart als administrator is mislukt. Voer het script handmatig als beheerder uit." -ForegroundColor Red
+            Pause
+            Exit
+        }
+    }
+    else {
+        Write-Host "Script afgesloten — administratorrechten vereist." -ForegroundColor Yellow
+        Pause
+        Exit
+    }
+}
+
+# === Logbestand per sessie (in ./logs map) ===
 $TimeStamp    = Get-Date -Format "yyyyMMdd-HHmmss"
 $ComputerName = $env:COMPUTERNAME
-$DesktopPath  = [Environment]::GetFolderPath("Desktop")
 
-if (!(Test-Path $DesktopPath)) { New-Item -ItemType Directory -Path $DesktopPath | Out-Null }
-$LogFile      = Join-Path $DesktopPath "logfile-script-$ComputerName-$TimeStamp.txt"
+# Bepaal de hoofdmap van het script 
+$ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
 
-Write-Host "Hoofdmenu starten, een ogenblik geduld a.u.b..."
+# Definieer de logdirectory
+$LogDir = Join-Path $ScriptRoot "logs"
+
+# Maak directory aan indien niet bestaat
+if (!(Test-Path $LogDir)) {
+    New-Item -ItemType Directory -Path $LogDir | Out-Null
+}
+
+# Stel logbestand in
+$LogFile = Join-Path $LogDir "systemlog-$ComputerName-$TimeStamp.txt"
+
+# Feedback bij start
+Write-Host "Logbestand wordt aangemaakt in: $LogFile" -ForegroundColor DarkGray
+Write-Host "Script gestart op $(Get-Date)" -ForegroundColor DarkGray
+Write-Host "Even geduld, diagnostiek wordt verzameld..." -ForegroundColor DarkGray
 
 # === Functies ===
+# Universele loggingfunctie
+function Write-Log {
+    param (0
+        [Parameter(Mandatory = $true)]
+        [string]$Message,
+
+        [ValidateSet('INFO','WARNING','ERROR')]
+        [string]$Level = 'INFO'
+    )
+
+    $Time = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    $LogLine = "[$Time] [$Level] $Message"
+
+    # 1️⃣ Wegschrijven naar logbestand
+    Add-Content -Path $LogFile -Value $LogLine
+
+    # 2️⃣ Console-uitvoer met kleur per type
+    switch ($Level) {
+        'INFO'    { Write-Host $LogLine -ForegroundColor Gray }
+        'WARNING' { Write-Host $LogLine -ForegroundColor Yellow }
+        'ERROR'   { Write-Host $LogLine -ForegroundColor Red }
+    }
+}
+
 function Clear-TempFiles {
     $Log = @()
     $Log += "=== OPSCHONEN TIJDELIJKE BESTANDEN - $ComputerName ==="
